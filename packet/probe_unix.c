@@ -296,6 +296,7 @@ int open_ip4_sockets_dgram(
     }
 #ifdef HAVE_LINUX_ERRQUEUE_H
     if (setsockopt(icmp_socket, SOL_IP, IP_RECVERR, &val, sizeof(val)) < 0) {
+        close(icmp_socket);
         return -1;
     }
 #endif
@@ -386,6 +387,7 @@ int open_ip6_sockets_dgram(
     }
 #ifdef HAVE_LINUX_ERRQUEUE_H
     if (setsockopt(icmp_socket, SOL_IPV6, IPV6_RECVERR, &val, sizeof(val)) < 0) {
+        close(icmp_socket);
         return -1;
     }
 #endif
@@ -534,10 +536,12 @@ void report_packet_error(
         printf("%d invalid-argument\n", command_token);
     } else if (errno == ENETDOWN) {
         printf("%d network-down\n", command_token);
+    } else if (errno == EHOSTDOWN) {
+        printf("%d host-down\n", command_token);
     } else if (errno == ENETUNREACH) {
-        printf("%d no-route\n", command_token);
+        printf("%d no-route-network\n", command_token);
     } else if (errno == EHOSTUNREACH) {
-        printf("%d no-route\n", command_token);
+        printf("%d no-route-host\n", command_token);
     } else if (errno == EPERM) {
         printf("%d permission-denied\n", command_token);
     } else if (errno == EADDRINUSE) {
