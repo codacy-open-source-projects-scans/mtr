@@ -63,12 +63,12 @@ typedef int time_t;
 #define FLD_INDEX_SZ 256
 
 /* net related definitions */
-#define SAVED_PINGS 200
+#define SAVED_PINGS 400
 #define MAX_PATH 128
 #define MaxHost 256
 #define MinPort 1024
 #define MaxPort 65535
-#define MAXPACKET 4470          /* largest test packet size */
+#define MAXPACKET 65535          /* largest test packet size */
 #define MINPACKET 28            /* 20 bytes IP header and 8 bytes ICMP or UDP */
 #define MAXLABELS 8             /* http://kb.juniper.net/KB2190 (+ 3 just in case) */
 
@@ -102,6 +102,7 @@ struct mtr_ctl {
     int mtrtype;                /* type of query packet used */
     int fstTTL;                 /* initial hub(ttl) to ping byMin */
     int maxTTL;                 /* last hub to ping byMin */
+    int dueTTL;                 /* don't stop until reach dueTTL */
     int maxUnknown;             /* stop ping threshold */
     int maxDisplayPath;         /* maximum number of ECMP paths to display */
     int remoteport;             /* target port for TCP tracing */

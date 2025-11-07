@@ -46,10 +46,18 @@ enum {
 #endif
 };
 
+// if we have libncursesw and braille graphs were enabled, build with them
+#if HAVE_CURSESW && ENABLE_BRAILLE
+#define WITH_BRAILLE_DISPLAY 1
+#endif
+
 enum {
     DisplayModeDefault,
     DisplayModeBlockmap,
     DisplayModeBlockmapScale,
+#ifdef WITH_BRAILLE_DISPLAY
+    DisplayModeBraille,
+#endif
     DisplayModeMAX              /* this must be the last DisplayMode entry */
 };
 
@@ -71,7 +79,7 @@ extern void display_rawxmit(
 extern void display_rawping(
     struct mtr_ctl *ctl,
     int hostnum,
-    int msec,
+    int usec,
     int seq);
 extern void display_rawhost(
     struct mtr_ctl *ctl,

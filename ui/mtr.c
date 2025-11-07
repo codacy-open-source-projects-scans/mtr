@@ -44,6 +44,7 @@
 #include <assert.h>
 #include <fcntl.h>
 #include <limits.h>
+#include <locale.h>
 #include <sys/stat.h>
 #include <sys/time.h>
 
@@ -106,6 +107,7 @@ static void __attribute__ ((__noreturn__)) usage(FILE * out)
     fputs(" -a, --address ADDRESS            bind the outgoing socket to ADDRESS\n", out);  
     fputs(" -f, --first-ttl NUMBER           set what TTL to start\n", out);
     fputs(" -m, --max-ttl NUMBER             maximum number of hops\n", out);
+    fputs(" -D, --due-ttl NUMBER             set what TTL must be reached\n", out);
     fputs(" -U, --max-unknown NUMBER         maximum unknown host\n", out);
     fputs(" -E, --max-display-path NUMBER    maximum number of ECMP paths to display\n", out);
     fputs(" -P, --port PORT                  target port number for TCP, SCTP, or UDP\n", out);  
@@ -355,6 +357,7 @@ static void parse_arg(
         {"address", 1, NULL, 'a'},
         {"first-ttl", 1, NULL, 'f'},    /* -f & -m are borrowed from traceroute */
         {"max-ttl", 1, NULL, 'm'},
+        {"due-ttl", 1, NULL, 'D'},
         {"max-unknown", 1, NULL, 'U'},
         {"max-display-path", 1, NULL, 'E'},
         {"udp", 0, NULL, 'u'},  /* UDP (default is ICMP) */
@@ -439,19 +442,22 @@ static void parse_arg(
 
         case OPT_DISPLAYMODE:
             ctl->display_mode =
-                strtonum_or_err(optarg, "invalid argument", STRTO_INT);
+                strtoint_or_err(optarg, "invalid argument");
             if ((DisplayModeMAX - 1) < ctl->display_mode)
                 error(EXIT_FAILURE, 0, "value out of range (%d - %d): %s",
                       DisplayModeDefault, (DisplayModeMAX - 1), optarg);
             break;
         case 'c':
             ctl->MaxPing =
-                strtonum_or_err(optarg, "invalid argument", STRTO_INT);
+                strtoint_or_err(optarg, "invalid argument");
             ctl->ForceMaxPing = 1;
             break;
         case 's':
             ctl->cpacketsize =
-                strtonum_or_err(optarg, "invalid argument", STRTO_INT);
+                strtoint_or_err(optarg, "invalid argument");
+            if (abs(ctl->cpacketsize) < MINPACKET || abs(ctl->cpacketsize) > MAXPACKET) {
+                error(EXIT_FAILURE, 0, "value of of range (%d - %d)", MINPACKET, MAXPACKET);
+            }
             break;
         case 'I':
             ctl->InterfaceName = optarg;
@@ -476,11 +482,7 @@ static void parse_arg(
             }
             break;
         case 'f':
-            ctl->fstTTL =
-                strtonum_or_err(optarg, "invalid argument", STRTO_INT);
-            if (ctl->fstTTL > ctl->maxTTL) {
-                ctl->fstTTL = ctl->maxTTL;
-            }
+            ctl->fstTTL = strtoint_or_err(optarg, "invalid argument");
             if (ctl->fstTTL < 1) {      /* prevent 0 hop */
                 ctl->fstTTL = 1;
             }
@@ -489,27 +491,32 @@ static void parse_arg(
             read_from_file(names, optarg);
             break;
         case 'm':
-            ctl->maxTTL =
-                strtonum_or_err(optarg, "invalid argument", STRTO_INT);
+            ctl->maxTTL = strtoint_or_err(optarg, "invalid argument");
             if (ctl->maxTTL > (MaxHost - 1)) {
                 ctl->maxTTL = MaxHost - 1;
             }
             if (ctl->maxTTL < 1) {      /* prevent 0 hop */
                 ctl->maxTTL = 1;
             }
-            if (ctl->fstTTL > ctl->maxTTL) {    /* don't know the pos of -m or -f */
-                ctl->fstTTL = ctl->maxTTL;
+            break;
+        case 'D':
+            ctl->dueTTL = strtoint_or_err(optarg, "invalid argument");
+            if (ctl->dueTTL > (MaxHost - 1)) {
+                ctl->dueTTL = MaxHost - 1;
+            }
+            if (ctl->dueTTL <= 0) {
+                error(EXIT_FAILURE, 0, "due TTL must be greater than 0");
             }
             break;
         case 'U':
             ctl->maxUnknown =
-                strtonum_or_err(optarg, "invalid argument", STRTO_INT);
+                strtoint_or_err(optarg, "invalid argument");
             if (ctl->maxUnknown < 1) {
                 ctl->maxUnknown = 1;
             }
             break;
         case 'E':
-            ctl->maxDisplayPath = strtonum_or_err(optarg, "invalid argument", STRTO_INT);
+            ctl->maxDisplayPath = strtoint_or_err(optarg, "invalid argument");
             if (ctl->maxDisplayPath > MAX_PATH) {
                 ctl->maxDisplayPath = MAX_PATH;
             }
@@ -529,7 +536,7 @@ static void parse_arg(
             break;
         case 'B':
             ctl->bitpattern =
-                strtonum_or_err(optarg, "invalid argument", STRTO_INT);
+                strtoint_or_err(optarg, "invalid argument");
             if (ctl->bitpattern > 255)
                 ctl->bitpattern = -1;
             break;
@@ -541,7 +548,7 @@ static void parse_arg(
             break;
         case 'Q':
             ctl->tos =
-                strtonum_or_err(optarg, "invalid argument", STRTO_INT);
+                strtoint_or_err(optarg, "invalid argument");
             if (ctl->tos > 255 || ctl->tos < 0) {
                 /* error message, should do more checking for valid values,
                  * details in rfc2474 */
@@ -582,7 +589,7 @@ static void parse_arg(
             break;
         case 'P':
             ctl->remoteport =
-                strtonum_or_err(optarg, "invalid argument", STRTO_INT);
+                strtoint_or_err(optarg, "invalid argument");
             if (ctl->remoteport < 1 || MaxPort < ctl->remoteport) {
                 error(EXIT_FAILURE, 0, "Illegal port number: %d",
                       ctl->remoteport);
@@ -590,7 +597,7 @@ static void parse_arg(
             break;
         case 'L':
             ctl->localport =
-                strtonum_or_err(optarg, "invalid argument", STRTO_INT);
+                strtoint_or_err(optarg, "invalid argument");
             if (ctl->localport < MinPort || MaxPort < ctl->localport) {
                 error(EXIT_FAILURE, 0, "Illegal port number: %d",
                       ctl->localport);
@@ -598,7 +605,7 @@ static void parse_arg(
             break;
         case 'Z':
             ctl->probe_timeout =
-                strtonum_or_err(optarg, "invalid argument", STRTO_INT);
+                strtoint_or_err(optarg, "invalid argument");
             ctl->probe_timeout *= 1000000;
             break;
         case '4':
@@ -612,7 +619,7 @@ static void parse_arg(
 #ifdef HAVE_IPINFO
         case 'y':
             ctl->ipinfo_no =
-                strtonum_or_err(optarg, "invalid argument", STRTO_INT);
+                strtoint_or_err(optarg, "invalid argument");
             if (ctl->ipinfo_no < 0 || 4 < ctl->ipinfo_no) {
                 error(EXIT_FAILURE, 0, "value %d out of range (0 - 4)",
                       ctl->ipinfo_no);
@@ -633,7 +640,7 @@ static void parse_arg(
 #ifdef SO_MARK
         case 'M':
             ctl->mark =
-                strtonum_or_err(optarg, "invalid argument", STRTO_U32INT);
+                strtoulong_or_err(optarg, "invalid argument");
             break;
 #endif
         default:
@@ -649,6 +656,23 @@ static void parse_arg(
         ctl->DisplayMode == DisplayXML ||
         ctl->DisplayMode == DisplayRaw || ctl->DisplayMode == DisplayCSV)
         ctl->Interactive = 0;
+
+    if (ctl->fstTTL > ctl->maxTTL) {
+        fprintf (stderr, "%s: firstTTL(%d) cannot be larger than maxTTL(%d). \n", 
+		argv[0], ctl->fstTTL, ctl->maxTTL);
+        exit (1);
+        //ctl->fstTTL = ctl->maxTTL;
+    }
+    if (ctl->dueTTL > 0 && ctl->dueTTL < ctl->fstTTL) {
+        fprintf (stderr, "%s: dueTTL(%d) cannot be less than firstTTL(%d). \n", 
+                argv[0], ctl->dueTTL, ctl->fstTTL);
+        exit (1);
+    }
+    if (ctl->dueTTL > ctl->maxTTL) {
+        fprintf (stderr, "%s: dueTTL(%d) cannot be larger than maxTTL(%d). \n", 
+                argv[0], ctl->dueTTL, ctl->maxTTL);
+        exit (1);
+    }
 
     if (optind > argc - 1)
         return;
@@ -748,6 +772,7 @@ int main(
     ctl.mtrtype = IPPROTO_ICMP;
     ctl.fstTTL = 1;
     ctl.maxTTL = 30;
+    ctl.dueTTL = 0;
     ctl.maxUnknown = 12;
     ctl.maxDisplayPath = 8;
     ctl.probe_timeout = 10 * 1000000;
@@ -773,6 +798,9 @@ int main(
 
     /* This will check if stdout/stderr writing is successful */
     atexit(close_stdout);
+
+    /* Set encoding for reports */
+    setlocale(LC_CTYPE, "C.UTF-8");
 
     /* reset the random seed */
     init_rand();
