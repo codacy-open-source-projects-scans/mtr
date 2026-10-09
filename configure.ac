@@ -43,6 +43,7 @@ AC_CHECK_SIZEOF([unsigned long], [4])
 # Check headers.
 AC_CHECK_HEADERS([ \
   arpa/nameser_compat.h \
+  bsd/stdlib.h \
   curses.h \
   cursesX.h \
   error.h \
@@ -51,6 +52,7 @@ AC_CHECK_HEADERS([ \
   linux/errqueue.h \
   ncurses.h \
   ncurses/curses.h \
+  netdb.h \
   netinet/in.h \
   socket.h \
   sys/cdefs.h \
@@ -67,6 +69,9 @@ AC_CHECK_FUNCS([ \
   __fpending \
   fcntl \
 ])
+AC_SEARCH_LIBS([arc4random_uniform], [bsd],
+  [AC_DEFINE([HAVE_ARC4RANDOM_UNIFORM], [1],
+    [Define to 1 if arc4random_uniform is available.])])
 
 AC_CHECK_FUNC([error], [with_error=no],
   [AC_CHECK_FUNCS([verr verrx vwarn vwarnx], [with_error=yes],
@@ -138,6 +143,10 @@ AS_IF([test "x$with_ncurses" = "xyes"],
     [initscr], [ncursesw ncurses curses],
     [AC_DEFINE([HAVE_CURSES], [1], [Define if a curses library available])],
     [with_ncurses=no])
+   AC_SEARCH_LIBS(
+     [raw], [tinfow tinfo termcap],
+     [],
+     [with_ncurses=no])
 ])
 AM_CONDITIONAL([WITH_CURSES], [test "x$with_ncurses" = xyes])
 
@@ -203,7 +212,6 @@ AC_CHECK_DECLS([errno], [], [], [[
 #include <errno.h>
 #include <sys/errno.h>
   ]])
-
 AC_CHECK_TYPE([socklen_t],
   [AC_DEFINE([HAVE_SOCKLEN_T], [], [Define if your system has socklen_t])], [],
   [[#include <netinet/in.h>
@@ -287,6 +295,22 @@ AC_ARG_ENABLE([bash-completion],
   [], [enable_bash_completion=yes]
 )
 AM_CONDITIONAL([BUILD_BASH_COMPLETION], [test "x$enable_bash_completion" = xyes])
+
+mtr_packet_prefix=
+mtr_packet_suffix=
+AS_IF([test "x$program_prefix" != "xNONE"], [
+  mtr_packet_prefix=$program_prefix
+])
+AS_IF([test "x$program_suffix" != "xNONE"], [
+  mtr_packet_suffix=$program_suffix
+])
+MTR_PACKET_NAME="${mtr_packet_prefix}mtr-packet${mtr_packet_suffix}"
+AC_SUBST([MTR_PACKET_NAME])
+AC_DEFINE_UNQUOTED(
+  [MTR_PACKET_NAME],
+  ["$MTR_PACKET_NAME"],
+  [Name of the installed mtr-packet executable after program transforms.])
+
 echo "build options:"
 echo "--------------"
 echo "libasan  :$with_libasan"

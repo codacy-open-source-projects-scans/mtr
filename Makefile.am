@@ -2,16 +2,21 @@ EXTRA_DIST = \
 	BSDCOPYING \
 	SECURITY \
 	build-aux/mtr.bat \
-	img/mtr_icon.xpm
-	$(TEST_FILES)
+	img/mtr_icon.xpm \
+	img/mtr.png
 
 sbin_PROGRAMS = mtr mtr-packet
 TESTS = \
+	test/capability-drop.py \
+	test/dist-version.sh \
+	format-count-test \
 	test/cmdparse.py \
 	test/param.py \
 	test/probe.py
 
 TEST_FILES = \
+	test/capability-drop.py \
+	test/dist-version.sh \
 	test/cmdparse.py \
 	test/mtrpacket.py \
 	test/param.py \
@@ -41,10 +46,16 @@ dist_man_MANS = mtr.8 mtr-packet.8
 PATHFILES += man/mtr.8 man/mtr-packet.8
 
 install-exec-hook:
-	`setcap cap_net_raw+ep $(DESTDIR)$(sbindir)/mtr-packet` \
-	|| chmod u+s $(DESTDIR)$(sbindir)/mtr-packet
+	mtr_packet_name=`echo mtr-packet | sed '$(transform)'`; \
+	if command -v setcap >/dev/null 2>&1; then \
+		setcap cap_net_raw+ep $(DESTDIR)$(sbindir)/$$mtr_packet_name \
+		|| chmod u+s $(DESTDIR)$(sbindir)/$$mtr_packet_name; \
+	else \
+		chmod u+s $(DESTDIR)$(sbindir)/$$mtr_packet_name; \
+	fi
 
 mtr_SOURCES = ui/mtr.c ui/mtr.h \
+              ui/format.c ui/format.h \
               ui/net.c ui/net.h \
               ui/cmdpipe.c ui/cmdpipe.h \
               ui/dns.c ui/dns.h \
@@ -153,7 +164,7 @@ dist-windows-bin: distdir-win
 
 else  # if CYGWIN
 
-check_PROGRAMS = mtr-packet-listen
+check_PROGRAMS = mtr-packet-listen format-count-test
 
 mtr_packet_SOURCES += \
 	packet/construct_unix.c packet/construct_unix.h \
@@ -164,11 +175,26 @@ mtr_packet_SOURCES += \
 mtr_packet_listen_SOURCES = \
 	test/packet_listen.c
 
+format_count_test_SOURCES = \
+	test/format_count.c \
+	ui/format.c ui/format.h
+
 endif  # if CYGWIN
 
 
 if BUILD_BASH_COMPLETION
 dist_bashcompletion_DATA = bash-completion/mtr
+endif
+
+if WITH_GTK
+desktopdir = $(datadir)/applications
+dist_desktop_DATA = data/mtr.desktop
+
+appstreamdir = $(datadir)/metainfo
+dist_appstream_DATA = data/mtr.metainfo.xml
+
+icondir = $(datadir)/icons/hicolor/48x48/apps
+dist_icon_DATA = img/mtr.png
 endif
 
 dist-hook:

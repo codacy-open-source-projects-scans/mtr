@@ -21,6 +21,7 @@
 #include "utils.h"
 
 #include <errno.h>
+#include <net/if.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/socket.h>
@@ -34,15 +35,26 @@
 #define SOL_IP IPPROTO_IP
 #endif
 
-#ifdef HAVE_LIBCAP
-#include <sys/capability.h>
-#endif
+#define MIN_UNPRIVILEGED_PORT 1024
+#define UDP_PORT_RANGE 65536
 
 /*  A source of data for computing a checksum  */
 struct checksum_source_t {
     const void *data;
     size_t size;
 };
+
+static
+uint16_t udp_source_port_from_pid(void)
+{
+    uint16_t port = getpid() & 0xffff;
+
+    if (port < MIN_UNPRIVILEGED_PORT) {
+        port += UDP_PORT_RANGE - MIN_UNPRIVILEGED_PORT;
+    }
+
+    return port;
+}
 
 /*  Compute the IP checksum (or ICMP checksum) of a packet.  */
 static
@@ -164,7 +176,7 @@ void set_udp_ports(
         if (param->local_port) {
             udp->srcport = htons(param->local_port);
         } else {
-            udp->srcport = htons(getpid());
+            udp->srcport = htons(udp_source_port_from_pid());
         }
 
         udp->checksum = 0;
@@ -175,8 +187,8 @@ void set_udp_ports(
 
 /* Prepend pseudoheader to the udp datagram and calculate checksum */
 static
-int udp4_checksum(void *pheader, void *udata, int psize, int dsize,
-                  int alt_checksum)
+int udp_checksum(void *pheader, void *udata, int psize, int dsize,
+                 int alt_checksum)
 {
     unsigned int totalsize = psize + dsize;
     unsigned char csumpacket[totalsize];
@@ -234,7 +246,7 @@ int construct_udp4_packet(
                                                   udp_size +
                                                   sizeof(struct UDPHeader)];
     }
-    *checksum_off = htons(udp4_checksum(&udph, udp,
+    *checksum_off = htons(udp_checksum(&udph, udp,
                                         sizeof(struct UDPPseudoHeader),
                                         udp_size, udp->checksum != 0));
 
@@ -277,105 +289,55 @@ int construct_udp6_packet(
          checksum_off is udp payload */
         checksum_off = (uint16_t *)&packet_buffer[sizeof(struct UDPHeader)];
     }
-    *checksum_off = htons(udp4_checksum(&udph, udp,
+    *checksum_off = htons(udp_checksum(&udph, udp,
                                         sizeof(struct IP6PseudoHeader),
                                         udp_size, udp->checksum != 0));
     return 0;
 }
 
-/*
-    This defines a common interface which elevates privileges on
-    platforms with LIBCAP and acts as a NOOP on platforms without
-    it.
-*/
-#ifdef HAVE_LIBCAP
-
-typedef cap_value_t mayadd_cap_value_t;
-#define MAYADD_CAP_NET_RAW CAP_NET_RAW
-#define MAYADD_CAP_NET_ADMIN CAP_NET_ADMIN
-
-#else /* ifdef HAVE_LIBCAP */
-
-typedef int mayadd_cap_value_t;
-#define MAYADD_CAP_NET_RAW ((mayadd_cap_value_t) 0)
-#define MAYADD_CAP_NET_ADMIN ((mayadd_cap_value_t) 0)
-
-#endif /* ifdef HAVE_LIBCAP */
-
-UNUSED static
-int set_privileged_socket_opt(int socket, int option_name,
-    void const * option_value, socklen_t option_len,
-    UNUSED mayadd_cap_value_t required_cap) {
-
-    int result = -1;
-
-    // Add CAP_NET_ADMIN to the effective set if libcap is present
-#ifdef HAVE_LIBCAP
-    static cap_value_t cap_add[1];
-    cap_add[0] = required_cap;
-
-    // Get the capabilities of the current process
-    cap_t cap = cap_get_proc();
-    if (cap == NULL) {
-        goto cleanup_and_exit;
-    }
-
-    // Set the required capability flag
-    if (cap_set_flag(cap, CAP_EFFECTIVE, N_ENTRIES(cap_add), cap_add,
-        CAP_SET)) {
-        goto cleanup_and_exit;
-    }
-
-    // Apply the modified capabilities to the current process
-    if (cap_set_proc(cap)) {
-        goto cleanup_and_exit;
-    }
-#endif /* ifdef HAVE_LIBCAP */
-
-    // Set the socket mark
-    int set_sock_err = setsockopt(socket, SOL_SOCKET, option_name, option_value, option_len);
-
-    // Drop CAP_NET_ADMIN from the effective set if libcap is present
-#ifdef HAVE_LIBCAP
-
-    // Clear the CAP_NET_ADMIN capability flag
-    if (cap_set_flag(cap, CAP_EFFECTIVE, N_ENTRIES(cap_add), cap_add,
-        CAP_CLEAR)) {
-        goto cleanup_and_exit;
-    }
-
-    // Apply the modified capabilities to the current process
-    if (cap_set_proc(cap)) {
-        goto cleanup_and_exit;
-    }
-#endif /* ifdef HAVE_LIBCAP */
-
-    if(!set_sock_err) {
-        result = 0; // Success
-    }
-
-#ifdef HAVE_LIBCAP
-cleanup_and_exit:
-    cap_free(cap);
-#endif /* ifdef HAVE_LIBCAP */
-
-    return result;
-}
-
 /* Set the socket mark */
 #ifdef SO_MARK
 static
-int set_socket_mark(int socket, unsigned int mark) {
-    return set_privileged_socket_opt(socket, SO_MARK, &mark, sizeof(mark),
-        MAYADD_CAP_NET_ADMIN);
+int set_socket_mark(
+    int socket,
+    unsigned int mark)
+{
+    return setsockopt(socket, SOL_SOCKET, SO_MARK, &mark, sizeof(mark));
 }
 #endif /* ifdef SO_MARK */
 
 #ifdef SO_BINDTODEVICE
+/*
+    Bind the socket to a network device.
+
+    Linux lets an unprivileged process bind a socket to a device only
+    while the socket is not yet bound to one; re-binding, even to the
+    same device, requires CAP_NET_RAW.  mtr-packet drops all of its
+    capabilities right after opening its sockets and then applies the
+    probe parameters to the same shared send socket for every probe,
+    so a plain setsockopt succeeds for the first probe and fails with
+    EPERM for every later one.  Skip the setsockopt when the socket is
+    already bound to the requested device.  (Requesting a different
+    device on an already-bound shared socket still fails with EPERM,
+    which is reported as permission-denied for that probe.)
+*/
 static
-int set_bind_to_device(int socket, char const * device) {
-    return set_privileged_socket_opt(socket, SO_BINDTODEVICE, device,
-            strlen(device), MAYADD_CAP_NET_RAW);
+int set_bind_to_device(
+    int socket,
+    char const *device)
+{
+    char bound_device[IFNAMSIZ];
+    socklen_t bound_device_len = sizeof(bound_device);
+
+    memset(bound_device, 0, sizeof(bound_device));
+    if (getsockopt(socket, SOL_SOCKET, SO_BINDTODEVICE,
+                   bound_device, &bound_device_len) == 0 &&
+        strcmp(bound_device, device) == 0) {
+        return 0;
+    }
+
+    return setsockopt(socket, SOL_SOCKET, SO_BINDTODEVICE, device,
+                      strlen(device));
 }
 #endif /* ifdef SO_BINDTODEVICE */
 
@@ -882,9 +844,7 @@ int construct_ip6_packet(
 
 #ifdef SO_BINDTODEVICE
     if (param->local_device) {
-        if (setsockopt(send_socket,
-                       SOL_SOCKET, SO_BINDTODEVICE, param->local_device,
-                       strlen(param->local_device))) {
+        if (set_bind_to_device(send_socket, param->local_device)) {
             return -1;
         }
     }
